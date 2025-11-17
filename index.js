@@ -1,88 +1,213 @@
-const { google } = require("googleapis");
-const { GoogleAuth } = require("google-auth-library");
-const axios = require("axios");
-require("dotenv").config();
+import { App } from "@slack/bolt";
+import dotenv from "dotenv";
+import { GoogleAuth } from "google-auth-library";
+import { google } from "googleapis";
+
+dotenv.config();
 
 const auth = new GoogleAuth({
-  scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
 
-exports.slackEntry = async (req, res) => {
-  const body = req.body;
-  const params = new URLSearchParams(body);
+const authClient = await auth.getClient();
+const sheets = google.sheets({ version: "v4", auth: authClient });
+const spreadsheetId = process.env.SPREADSHEET_ID;
+var kuassaProjects = [];
+var mixwaveProjects = [];
 
-  const command = params.get("command")?.toLowerCase();
-  const user = params.get("user_name");
-  const text = params.get("text");
-  const responseUrl = params.get("response_url");
-
-  res.status(200).send();
-
-  if (command === "/report") {
-    await handleReportCommand(text, user, responseUrl);
-  } else if (command === "/list") {
-    await handleListCommand(text, responseUrl);
-  } else {
-    await postToSlack(responseUrl, "❌ Perintah tidak dikenali.");
-  }
+const project = {
+  Kuassa: kuassaProjects,
+  MixWave: mixwaveProjects,
 };
 
-async function handleReportCommand(text, user, responseUrl) {
-  const parts = text.split("|").map(s => s.trim());
-  if (parts.length < 3) {
-    return postToSlack(responseUrl, "❌ Format salah. Gunakan: /report [project] | [sub-project] | [aktivitas] | [optional: dd/mm/yyyy]");
-  }
+const app = new App({
+  token: process.env.SLACK_BOT_TOKEN,
+  signingSecret: process.env.SLACK_SIGNING_SECRET,
+  appToken: process.env.SLACK_APP_TOKEN,
+  socketMode: true,
+});
 
-  const [projectRaw, subProjectRaw, activityRaw, optionalDate] = parts;
-  const project = projectRaw.toLowerCase();
-  const subProject = subProjectRaw.toLowerCase();
-  const activity = activityRaw;
+app.command("/reportgawe", async ({ ack, body, client }) => {
+  await ack();
+  const today = new Date().toISOString().split("T")[0];
 
+  await client.views.open({
+    trigger_id: body.trigger_id,
+    view: makeModal({ date: today }),
+  });
+});
+
+app.command("/refresh", async ({ ack, body, client }) => {
+  await ack();
+  kuassaProjects = await getSubProjects("kuassa");
+  mixwaveProjects = await getSubProjects("mixwave");
+  await client.chat.postMessage({
+    channel: body.user_id,
+    text: `✅ List has been refreshed`,
+  });
+});
+
+async function getSubProjects(project) {
   try {
-    const authClient = await auth.getClient();
     const sheets = google.sheets({ version: "v4", auth: authClient });
-    const spreadsheetId = process.env.SPREADSHEET_ID;
+    const subRes = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `SheetProject_${project}!A2:A100`,
+    });
 
+    const subProjects = subRes.data.values?.flat() || [];
+    if (!subProjects.length) {
+      console.log(`📭 Tidak ada sub-project di *${project}*.`);
+      return [];
+    }
+    return subProjects;
+  } catch (err) {
+    console.error("[ERROR handleList]", err);
+    return [];
+  }
+}
+
+function makeModal({ date, project, subprojectOptions = [] }) {
+  return {
+    type: "modal",
+    callback_id: "report_submit",
+    title: { type: "plain_text", text: "Daily Report" },
+    submit: { type: "plain_text", text: "Submit" },
+    close: { type: "plain_text", text: "Cancel" },
+    blocks: [
+      {
+        type: "input",
+        block_id: "date",
+        label: { type: "plain_text", text: "Date" },
+        element: {
+          type: "plain_text_input",
+          action_id: "value",
+          initial_value: date,
+        },
+        optional: false,
+      },
+      {
+        type: "section",
+        block_id: "project",
+        text: { type: "mrkdwn", text: "*Project*" },
+        accessory: {
+          type: "radio_buttons",
+          action_id: "project_select",
+          options: [
+            { text: { type: "plain_text", text: "Kuassa" }, value: "kuassa" },
+            { text: { type: "plain_text", text: "Mixwave" }, value: "mixwave" },
+          ],
+        },
+      },
+      {
+        type: "input",
+        block_id: "subproject",
+        label: { type: "plain_text", text: "Sub Project" },
+        element: {
+          type: "static_select",
+          action_id: "subproject_select",
+          placeholder: { type: "plain_text", text: "Select a subproject..." },
+          options:
+            subprojectOptions.length > 0
+              ? subprojectOptions // ✅ use directly, no map
+              : [
+                  {
+                    text: {
+                      type: "plain_text",
+                      text: "— Please select a project first —",
+                    },
+                    value: "none",
+                  },
+                ],
+        },
+        optional: false,
+      },
+      {
+        type: "input",
+        block_id: "description",
+        label: { type: "plain_text", text: "Description" },
+        element: {
+          type: "plain_text_input",
+          action_id: "value",
+          multiline: true,
+          initial_value: "Do:\n\n\nObstacle:\n",
+        },
+      },
+    ],
+  };
+}
+
+// --- dynamic update when project changes ---
+app.action("project_select", async ({ body, ack, client }) => {
+  await ack();
+  const project = body.actions[0].selected_option.value;
+  const date = new Date().toISOString().split("T")[0];
+  let subOpts = [];
+  if (project == "kuassa") subOpts = kuassaProjects;
+  else if (project == "mixwave") subOpts = mixwaveProjects;
+  subOpts = subOpts
+    .filter((s) => typeof s === "string" && s.trim().length > 0)
+    .map((s) => {
+      const short = s.length > 75 ? s.slice(0, 72) + "..." : s;
+      return {
+        text: { type: "plain_text", text: short },
+        value: s.slice(0, 75), // value also max 75 chars
+      };
+    });
+
+  await client.views.update({
+    view_id: body.view.id,
+    hash: body.view.hash,
+    view: makeModal({ date, project, subprojectOptions: subOpts }),
+  });
+});
+
+// --- form submission ---
+app.view("report_submit", async ({ ack, body, view, client }) => {
+  await ack();
+
+  const user = body.user.name;
+  const date = view.state.values.date.value.value;
+  const project =
+    view.state.values.project.project_select.selected_option.value;
+  const subproject =
+    view.state.values.subproject.subproject_select.selected_option.value;
+  const description = view.state.values.description.value.value;
+
+  // save to sheet here (your logic)
+  try {
     // Validasi project dan subproject
-    const projectList = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: "SheetProject!A2:A100"
-    }).then(res => res.data.values.flat().map(p => p.toLowerCase()));
+    const projectList = await sheets.spreadsheets.values
+      .get({
+        spreadsheetId,
+        range: "SheetProject!A2:A100",
+      })
+      .then((res) => res.data.values.flat().map((p) => p.toLowerCase()));
 
-    if (!projectList.includes(project)) {
-      return postToSlack(responseUrl, `❌ Project *${project}* tidak ditemukan di SheetProject.`);
-    }
-
-    const subProjectList = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `SheetProject_${project}!A2:A100`
-    }).then(res => res.data.values.flat().map(p => p.toLowerCase()));
-
-    if (!subProjectList.includes(subProject)) {
-      return postToSlack(responseUrl, `❌ *${subProjectRaw}* bukan sub-project dari *${project}*.`);
-    }
-
-    // Tanggal yang digunakan
     let dateUsed = new Date();
-    if (optionalDate && /^\d{2}\/\d{2}\/\d{4}$/.test(optionalDate)) {
-      const [dd, mm, yyyy] = optionalDate.split("/");
+    if (date && /^\d{4}\-\d{2}\-\d{2}$/.test(date)) {
+      const [yyyy, mm, dd] = date.split("-");
       dateUsed = new Date(`${yyyy}-${mm}-${dd}T00:00:00+07:00`);
     }
     if (isNaN(dateUsed.getTime())) {
-      return postToSlack(responseUrl, "❌ Format tanggal salah. Gunakan: dd/mm/yyyy");
+      await client.chat.postMessage({
+        channel: body.user.id,
+        text: `❌  Wrong date format! use yyyy-mm-dd`,
+      });
+      return;
     }
-
-    const formattedDate = new Date(dateUsed).toLocaleString("en-GB", {
-      timeZone: "Asia/Jakarta",
-      hour12: false
-    }).replace(",", "");
+    const formattedDate = new Date(dateUsed)
+      .toLocaleString("en-GB", {
+        timeZone: "Asia/Jakarta",
+        hour12: false,
+      })
+      .replace(",", "");
 
     const sheetName = `Report_${project}`;
-
     // Ambil data seluruh sheet untuk sheet ini
     const existing = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${sheetName}!A2:F`
+      range: `${sheetName}!A2:F`,
     });
 
     const rows = existing.data.values || [];
@@ -107,63 +232,35 @@ async function handleReportCommand(text, user, responseUrl) {
         range: `${sheetName}!E${rowIndex}`,
         valueInputOption: "RAW",
         requestBody: {
-          values: [[newWeight]]
-        }
+          values: [[newWeight]],
+        },
       });
     }
 
     // Tambahkan row baru
     const weekNumber = getWeekOfMonth(dateUsed);
-    const newRow = [[
-      formattedDate,
-      user,
-      subProjectRaw,
-      activity,
-      newWeight,
-      weekNumber
-    ]];
+    const newRow = [
+      [formattedDate, user, subproject, description, newWeight, weekNumber],
+    ];
 
     await sheets.spreadsheets.values.append({
       spreadsheetId,
       range: `${sheetName}!A:F`,
       valueInputOption: "USER_ENTERED",
-      requestBody: { values: newRow }
+      requestBody: { values: newRow },
     });
-
-    await postToSlack(responseUrl, `✅ Terima kasih, report *${subProjectRaw}* berhasil dikirim!`);
-  } catch (err) {
-    console.error("[ERROR handleReport]", err);
-    await postToSlack(responseUrl, "❌ Terjadi kesalahan internal.");
-  }
-}
-
-
-
-async function handleListCommand(text, responseUrl) {
-  const project = text.toLowerCase();
-  const spreadsheetId = process.env.SPREADSHEET_ID;
-
-  try {
-    const authClient = await auth.getClient();
-    const sheets = google.sheets({ version: "v4", auth: authClient });
-
-    const subRes = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `SheetProject_${project}!A2:A100`
+    await client.chat.postMessage({
+      channel: process.env.SLACK_CHANNEL_ID,
+      text: `✅ Report submitted:\n• *Name: ${user}*\n• *Date:* ${date}\n• *Project:* ${project}\n• *Sub Project:* ${subproject}\n• *Description:*\n${description}`,
     });
-
-    const subProjects = subRes.data.values?.flat() || [];
-    if (!subProjects.length) {
-      return postToSlack(responseUrl, `📭 Tidak ada sub-project di *${project}*.`);
-    }
-
-    const message = `*Daftar Sub-Project dari ${project}:*\n` + subProjects.map(p => `• ${p}`).join("\n");
-    await postToSlack(responseUrl, message);
-  } catch (err) {
-    console.error("[ERROR handleList]", err);
-    await postToSlack(responseUrl, "❌ Gagal mengambil daftar project.");
+  } catch (e) {
+    console.log(e);
+    // await client.chat.postMessage({
+    //   channel: body.user.id,
+    //   text: `Something wrong when happen, please report this error:\n\n${e.toString()}`,
+    // });
   }
-}
+});
 
 function getWeekOfMonth(date) {
   const d = new Date(date);
@@ -171,23 +268,11 @@ function getWeekOfMonth(date) {
   return Math.ceil((d.getDate() + first.getDay()) / 7);
 }
 
-function formatDateWIB(date) {
-  return new Date(date).toLocaleString("id-ID", {
-    timeZone: "Asia/Jakarta",
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false
-  });
-}
-
-async function postToSlack(url, text) {
-  try {
-    await axios.post(url, { text });
-  } catch (e) {
-    console.error("[ERROR postToSlack]", e);
-  }
-}
+(async () => {
+  kuassaProjects = await getSubProjects("kuassa");
+  console.log(kuassaProjects);
+  mixwaveProjects = await getSubProjects("mixwave");
+  console.log(mixwaveProjects);
+  await app.start(process.env.PORT || 3000);
+  console.log("⚡ Slackbot running!");
+})();

@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "main": "index.js",
   "dependencies": {
+    "@slack/bolt": "^4.5.0",
     "axios": "^1.6.8",
     "dotenv": "^16.4.5",
-    "googleapis": "^118.0.0",
-    "google-auth-library": "^9.0.0"
+    "google-auth-library": "^9.0.0",
+    "googleapis": "^118.0.0"
   }
 }
