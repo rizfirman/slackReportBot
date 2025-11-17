@@ -27,7 +27,7 @@ const app = new App({
   socketMode: true,
 });
 
-app.command("/reportgawe", async ({ ack, body, client }) => {
+app.command("/report", async ({ ack, body, client }) => {
   await ack();
   const today = new Date().toISOString().split("T")[0];
 
