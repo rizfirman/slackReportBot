@@ -2,6 +2,7 @@
   "name": "slack-report-bot",
   "version": "1.0.0",
   "main": "index.js",
+  "type": "module",
   "dependencies": {
     "@slack/bolt": "^4.5.0",
     "axios": "^1.6.8",

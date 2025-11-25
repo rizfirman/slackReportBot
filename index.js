@@ -124,14 +124,25 @@ function makeModal({ date, project, subprojectOptions = [] }) {
       },
       {
         type: "input",
-        block_id: "description",
-        label: { type: "plain_text", text: "Description" },
+        block_id: "do",
+        label: { type: "plain_text", text: "Do" },
         element: {
           type: "plain_text_input",
           action_id: "value",
           multiline: true,
-          initial_value: "Do:\n\n\nObstacle:\n",
         },
+        optional: false,
+      },
+      {
+        type: "input",
+        block_id: "obstacle",
+        label: { type: "plain_text", text: "Obstacle" },
+        element: {
+          type: "plain_text_input",
+          action_id: "value",
+          multiline: true,
+        },
+        optional: true,
       },
     ],
   };
@@ -172,11 +183,11 @@ app.view("report_submit", async ({ ack, body, view, client }) => {
     view.state.values.project.project_select.selected_option.value;
   const subproject =
     view.state.values.subproject.subproject_select.selected_option.value;
-  const description = view.state.values.description.value.value;
+  const do_ = view.state.values.do.value.value;
+  const obstacle = view.state.values.obstacle.value.value ?? "";
 
   // save to sheet here (your logic)
   try {
-    // Validasi project dan subproject
     const projectList = await sheets.spreadsheets.values
       .get({
         spreadsheetId,
@@ -207,7 +218,7 @@ app.view("report_submit", async ({ ack, body, view, client }) => {
     // Ambil data seluruh sheet untuk sheet ini
     const existing = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${sheetName}!A2:F`,
+      range: `${sheetName}!A2:G`,
     });
 
     const rows = existing.data.values || [];
@@ -229,7 +240,7 @@ app.view("report_submit", async ({ ack, body, view, client }) => {
       const rowIndex = idx + 2; // karena range dimulai dari A2
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: `${sheetName}!E${rowIndex}`,
+        range: `${sheetName}!F${rowIndex}`,
         valueInputOption: "RAW",
         requestBody: {
           values: [[newWeight]],
@@ -240,18 +251,18 @@ app.view("report_submit", async ({ ack, body, view, client }) => {
     // Tambahkan row baru
     const weekNumber = getWeekOfMonth(dateUsed);
     const newRow = [
-      [formattedDate, user, subproject, description, newWeight, weekNumber],
+      [formattedDate, user, subproject, do_, obstacle, newWeight, weekNumber],
     ];
 
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: `${sheetName}!A:F`,
+      range: `${sheetName}!A:G`,
       valueInputOption: "USER_ENTERED",
       requestBody: { values: newRow },
     });
     await client.chat.postMessage({
       channel: process.env.SLACK_CHANNEL_ID,
-      text: `✅ Report submitted:\n• *Name: ${user}*\n• *Date:* ${date}\n• *Project:* ${project}\n• *Sub Project:* ${subproject}\n• *Description:*\n${description}`,
+      text: `✅ Report submitted:\n• *Name: ${user}*\n• *Date:* ${date}\n• *Project:* ${project}\n• *Sub Project:* ${subproject}\n• *Do:*\n${do_}\n*Obstacle:*\n${obstacle}`,
     });
   } catch (e) {
     console.log(e);
