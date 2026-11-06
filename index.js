@@ -256,6 +256,31 @@ app.post('/', async (req, res) => {
           requestBody: { values: newRow },
         });
 
+        // Kirim notifikasi hasil report ke space task-report via Webhook
+        const webhookUrl = process.env.TASK_REPORT_WEBHOOK_URL;
+        if (webhookUrl) {
+          try {
+            const reportLines = [
+              "✅ *Report submitted:*",
+              `• *Name:* ${displayName}`,
+              `• *Date:* ${date || todayStr}`,
+              `• *Project:* ${project}`,
+              `• *Sub Project:* ${subproject}`,
+              `• *Do:*\n${do_}`,
+              obstacle ? `• *Obstacle:*\n${obstacle}` : `• *Obstacle:*\n-`
+            ];
+
+            await fetch(webhookUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ text: reportLines.join("\n") }),
+            });
+            console.log("📢 Notifikasi report berhasil dikirim ke space task-report!");
+          } catch (webhookErr) {
+            console.error("⚠️ Gagal mengirim webhook ke task-report:", webhookErr);
+          }
+        }
+
         return res.json({
           actionResponse: {
             type: "DIALOG",
