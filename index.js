@@ -350,7 +350,7 @@ app.post('/', async (req, res) => {
 // ============================================================================
 // ROUTE: JEMBATAN WEBHOOK ENCHANT -> GOOGLE CHAT
 // ============================================================================
-app.post('/enchant-webhook', async (req, res) => {
+app.post(['/enchant-webhook', '//enchant-webhook'], async (req, res) => {
   try {
     const data = req.body || {};
     console.log("📥 [ENCHANT] Menerima Webhook dari Enchant");
@@ -379,8 +379,8 @@ app.post('/enchant-webhook', async (req, res) => {
 
       message = `🔵 *New ticket from ${customerName}*\n${titleWithLink}`;
 
-      // Pesan tiket (jika ada di event data / last_message)
-      const bodyText = ticket.last_message?.body || data.data?.body || data.data?.message;
+      // Pesan tiket (ambil dari summary bersih Enchant atau fallback lainnya)
+      const bodyText = ticket.summary || data.data?.reply?.summary || ticket.last_message?.body || data.data?.body || data.data?.message;
       if (bodyText) {
         message += `\n\n${bodyText}`;
       }
