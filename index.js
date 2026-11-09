@@ -350,54 +350,44 @@ app.post('/', async (req, res) => {
 // ============================================================================
 // ROUTE: JEMBATAN WEBHOOK ENCHANT -> GOOGLE CHAT
 // ============================================================================
-app.post(['/enchant-webhook', '//enchant-webhook'], async (req, res) => {
+app.post('/enchant-webhook', async (req, res) => {
+  const payload = req.body;
+  console.log("📥 [ENCHANT] Menerima Webhook dari Enchant");
+
+  let message = "🔵 *Notifikasi Tiket Enchant*\n\n";
+
+  // Enchant menyimpan data tiket di dalam properti "model"
+  if (payload.model_type === 'ticket' && payload.model) {
+    const ticket = payload.model;
+
+    // Mengambil nama pelanggan dari actor_name
+    const customerName = payload.actor_name || 'Customer';
+    const ticketSubject = ticket.subject || 'Tanpa Subjek';
+    const ticketNumber = ticket.number ? `#${ticket.number}: ` : '';
+
+    // Merakit URL SPA secara manual menggunakan ID tiket
+    const finalUrl = `https://kuassa.enchant.com/spa/inbox/ticket/${ticket.id}`;
+    const ticketLink = `<${finalUrl}|${ticketNumber}${ticketSubject}>`;
+
+    message = `🔵 *New ticket from ${customerName}*\n${ticketLink}`;
+
+    // Menggunakan "summary" karena formatnya sudah teks bersih (tanpa kode HTML)
+    if (ticket.summary) {
+      message += `\n${ticket.summary}`;
+    }
+  } else {
+    // Fallback hanya jika tipe modelnya bukan tiket
+    message = `🔵 *Notifikasi Enchant Diterima!*\nSilakan cek inbox Enchant untuk detailnya.`;
+  }
+
+  const gcWebhookUrl = process.env.ENCHANT_GC_WEBHOOK_URL;
+
+  if (!gcWebhookUrl) {
+    console.error("❌ ENCHANT_GC_WEBHOOK_URL belum disetel di file .env");
+    return res.status(500).send("Webhook URL not configured");
+  }
+
   try {
-    const data = req.body || {};
-    console.log("📥 [ENCHANT] Menerima Webhook dari Enchant");
-    console.log(JSON.stringify(data, null, 2));
-
-    // 1. Ekstrak model tiket (dukung format resmi Enchant 'model' atau custom 'ticket')
-    const ticket = (data.model_type === 'ticket' ? data.model : null) || data.model || data.ticket;
-
-    let message = "";
-
-    if (ticket) {
-      // Di Enchant: nama pengirim ada di actor_name, fallback ke reply_to atau 'Customer'
-      const customerName = data.actor_name || data.customer?.name || ticket.reply_to || 'Customer';
-      const ticketSubject = ticket.subject || 'Tanpa Subjek';
-      const ticketNumber = ticket.number ? `#${ticket.number}` : '';
-
-      // Susun URL tiket: gunakan data.account_url dari Enchant jika url langsung tidak ada
-      let ticketUrl = ticket.url;
-      if (!ticketUrl && data.account_url && ticket.number) {
-        ticketUrl = `https://${data.account_url}/tickets/${ticket.number}`;
-      }
-
-      const titleWithLink = ticketUrl
-        ? `<${ticketUrl}|${ticketNumber ? ticketNumber + ': ' : ''}${ticketSubject}>`
-        : `${ticketNumber ? ticketNumber + ': ' : ''}${ticketSubject}`;
-
-      message = `🔵 *New ticket from ${customerName}*\n${titleWithLink}`;
-
-      // Pesan tiket (ambil dari summary bersih Enchant atau fallback lainnya)
-      const bodyText = ticket.summary || data.data?.reply?.summary || ticket.last_message?.body || data.data?.body || data.data?.message;
-      if (bodyText) {
-        message += `\n\n${bodyText}`;
-      }
-    } else {
-      // Fallback jika event Enchant bukan berupa tiket (misal event setting/user lain)
-      const eventType = data.type ? ` (${data.type})` : '';
-      message = `🔵 *Notifikasi Enchant Diterima${eventType}!*\nSilakan cek inbox Enchant untuk detailnya.`;
-      console.log("⚠️ Payload tidak memiliki objek tiket, menggunakan fallback text.");
-    }
-
-    // 2. Kirim ke Google Chat khusus Enchant
-    const gcWebhookUrl = process.env.ENCHANT_GC_WEBHOOK_URL;
-    if (!gcWebhookUrl) {
-      console.error("❌ ENCHANT_GC_WEBHOOK_URL belum disetel di file .env");
-      return res.status(500).send("Webhook URL not configured");
-    }
-
     const response = await fetch(gcWebhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -407,16 +397,13 @@ app.post(['/enchant-webhook', '//enchant-webhook'], async (req, res) => {
     if (response.ok) {
       console.log("✅ [ENCHANT] Berhasil meneruskan notifikasi ke Google Chat");
     } else {
-      console.error("❌ [ENCHANT] Gagal meneruskan ke Google Chat:", await response.text());
+      console.error("❌ [ENCHANT] Gagal meneruskan ke Google Chat", await response.text());
     }
-
-    // Wajib response 200 ke Enchant
-    return res.status(200).send('OK');
   } catch (err) {
-    console.error("❌ [ENCHANT] Error processing webhook:", err);
-    // Tetap return 200 agar server Enchant tidak menganggap webhook gagal / dinonaktifkan
-    return res.status(200).send('Error logged');
+    console.error("❌ [ENCHANT] Error fetch Google Chat:", err);
   }
+
+  return res.status(200).send('OK');
 });
 // ============================================================================
 
